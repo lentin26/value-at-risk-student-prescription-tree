@@ -13,7 +13,7 @@ class Node:
 
 class RiskAverseSPT:
 
-    def __init__(self, teacher, min_samples=1, risk_proba=0.05):
+    def __init__(self, teacher, prices, min_samples=1, risk_proba=0.05):
         """
         parameters:
         teacher (object): an instantiation of a class that has a `predict_proba` method
@@ -21,7 +21,7 @@ class RiskAverseSPT:
         """
         
         self.teacher = teacher          # teacher model
-        self.prices = []                # discrete price options
+        self.prices = prices            # discrete price options
         self.risk_proba = risk_proba    # risk probability
         self.min_samples = min_samples  # min_samples 
         self.total_rev = 0              # predicted total revenue
@@ -128,7 +128,7 @@ class RiskAverseSPT:
         # erase left
         node.left = None
         # erase right
-        node.right= None
+        node.right = None
 
     def _split_node(self, node):
         """
@@ -159,15 +159,17 @@ class RiskAverseSPT:
         self._add_children(node)
         # split node into left and right
         self._split_node(node)
-        # if risk-averse, recursively split
+        # if VaR is true recursively split
         if self._is_risk_averse(node):
+            # assert split params were assigned
+            assert (node.feature is not None) & (node.value is not None)
             # split left
             self._split(node.left)
             # split right
             self._split(node.right)
-        else:
-            # otherwise, remove left and right
-            self._remove_children(node)
+        # else:
+        #     # otherwise, remove left and right
+        #     self._remove_children(node)
 
     def _add_children(self, node):
         """
@@ -205,24 +207,12 @@ class RiskAverseSPT:
         node.feature = feature
         node.value = value
 
-    def _preprocess(self, X, prices):
-        """
-        Store variables and convert data to numpy.
-        """
-        # store length of training set
-        self.n_train = len(X)
-        # store prices
-        self.prices = prices
-        # safely convert data to numpy
-        X = np.asarray(X)
-        return X
-
-    def fit(self, X, prices):
+    def fit(self, X):
         """
         Fit the Student Prescription Tree.
         """
-        # prepare data
-        X = self._preprocess(X, prices)
+        # safely convert data to numpy
+        X = np.asarray(X)
         # create root node
         self.root_node = Node()
         # get best price for partition
@@ -240,13 +230,16 @@ class RiskAverseSPT:
         node.X_test = X
         # get split params
         feature, value = node.feature, node.value
-        # split data
-        X1, X2 = self._split_data(X, feature, value)
         # if not leaf node
         if not self._is_leaf(node):
+            # split data
+            X1, X2 = self._split_data(X, feature, value)
             # recursively split
             self._transform(X1, node.left)
             self._transform(X2, node.right)
+        else:
+            # update revenue
+            self.revenue += self._total_rev(node.revenue)
 
     def transform(self, X):
         """
@@ -259,38 +252,51 @@ class RiskAverseSPT:
         # transform recursivles
         self._transform(X, node)
 
+    def predict(self, X):
+        """
+        Predict revenue.
+        """
+        # reset revenue
+        self.revenue = 0
+        # parititon data
+        self.transform(X)
+        # return predicted revenue
+        return self.revenue, self.revenue / len(X)
+
+
     def _is_leaf(self, node):
         """
         Check if node is a leaf node.
         """
-        return (node.left is None) | (node.right is None)
+        # check for split parameters
+        return (node.feature is None) | (node.value is None)
 
-    def _expected_revenue(self, node):
-        """
-        Recursive function to add up revenue in leaf nodes.
-        """
-        # expected revenue
-        rev = node.revenue.mean(axis=1).sum()
-        # if leave node add revenue
-        if self._is_leaf(node):
-            # add revenue
-            self.total_rev += rev
-        else:
-            # recursive left
-            self._expected_revenue(node.left)
-            # recursive right
-            self._expected_revenue(node.right)
+    # def _expected_revenue(self, node):
+    #     """
+    #     Recursive function to add up revenue in leaf nodes.
+    #     """
+    #     # expected revenue
+    #     rev = node.revenue.mean(axis=1).sum()
+    #     # if leave node add revenue
+    #     if self._is_leaf(node):
+    #         # add revenue
+    #         self.total_rev += rev
+    #     else:
+    #         # recursive left
+    #         self._expected_revenue(node.left)
+    #         # recursive right
+    #         self._expected_revenue(node.right)
 
-    def expected_revenue(self):
-        """
-        Add up revenue in leaf nodes.
-        """
-        # reset total revenue
-        self.total_rev = 0
-        # add rev in leaf nodes
-        self._expected_revenue(self.root_node)
-        # compute average revenue
-        avg_rev = self.total_rev / self.n_train
-        # return total and avg revenue
-        return self.total_rev, avg_rev
+    # def expected_revenue(self):
+    #     """
+    #     Add up revenue in leaf nodes.
+    #     """
+    #     # reset total revenue
+    #     self.total_rev = 0
+    #     # add rev in leaf nodes
+    #     self._expected_revenue(self.root_node)
+    #     # compute average revenue
+    #     avg_rev = self.total_rev / self.n_train
+    #     # return total and avg revenue
+    #     return self.total_rev, avg_rev
 
