@@ -3,16 +3,13 @@ import numpy as np
 
 class Node:
     def __init__(self, X=None):
-        # data points, feature index and value for split
-        self.X = X
-        self.feature = None # feature split on
-        self.value = None   # feature value split on
-        self.post_revenue = None  # posterior revenue
-        self.revenue = None
-        # link to left and right children
-        self.left = None
-        self.right = None
-
+        self.X = X                      # train partition
+        self.feature = None             # feature split on
+        self.value = None               # feature value split on   
+        self.revenue = None             # posterior revenue
+        self.left = None                # left child
+        self.right = None               # right child
+        self.X_test = None              # test paritition
 
 class RiskAverseSPT:
 
@@ -22,16 +19,12 @@ class RiskAverseSPT:
         teacher (object): an instantiation of a class that has a `predict_proba` method
             which returns a values in (0, 1)
         """
-        # teacher model
-        self.teacher = teacher
-        # discrete price options
-        self.prices = []
-        # risk probability
-        self.risk_proba = risk_proba
-        # min_samples 
-        self.min_samples = min_samples
-        # 
-        self.total_rev = 0
+        
+        self.teacher = teacher          # teacher model
+        self.prices = []                # discrete price options
+        self.risk_proba = risk_proba    # risk probability
+        self.min_samples = min_samples  # min_samples 
+        self.total_rev = 0              # predicted total revenue
 
     def _is_risk_averse(self, node):
         """
@@ -69,35 +62,48 @@ class RiskAverseSPT:
         else:
             return 0
 
-    def _update_partition(self, node, X1, X2, rev1, rev2, p1, p2, value, feature):
+    def _update_partition(self, node, X1, X2, rev1, rev2, p1, p2, feature, value):
         """
         Update node attributes if partition gives higher total revenue.
         """
         # aggregate posteriors
-        old_rev = self._total_rev(node.left.revenue) + self._total_rev(node.right.revenue)
+        old_rev = self._total_rev(node.left.revenue) \
+            + self._total_rev(node.right.revenue)
         # get total revenue
         new_rev = self._total_rev(rev1) + self._total_rev(rev2)
         if new_rev > old_rev:
+            # update split params
+            self._update_params(node, feature, value)
             # update left partition
-            self._update_attrs(node.left, p1, rev1, value, feature, X1)
+            self._update_attrs(node.left, X1, p1, rev1)
             # update right partition
-            self._update_attrs(node.right, p2, rev2, value, feature, X2)
+            self._update_attrs(node.right, X2, p2, rev2)
 
-    def _update_best_split(self, node, value, j):
+    def _split_data(self, X, feature, value):
+        """
+        Split data using split parameters.
+        """
+        # get boolean
+        t = X[:, feature] >= value
+        # split data
+        X1, X2 =  X[t], X[~t]
+        # return split
+        return X1, X2
+
+    def _update_best_split(self, node, value, feature):
         """
         For a feature index j and feature value update nodes.
         """
-        # get split boolean
-        t = node.X[:, j] >= value
         # split data
-        X1, X2 =  node.X[t], node.X[~t]
+        X1, X2 = self._split_data(node.X, feature, value)
         # get left revenue posterior rev1 for best price p1
         p1, rev1 = self._get_best_price(X1)
         # get right revenue posterior rev2 for best price p2
         p2, rev2 = self._get_best_price(X2)
         # update best parition node
-        self._update_partition(node, X1, X2, rev1, rev2, p1, p2, value, j)
-
+        self._update_partition(
+            node, X1, X2, rev1, rev2, p1, p2, feature, value
+        )
 
     def _get_feature_splits(self, node, j):
         """
@@ -183,16 +189,21 @@ class RiskAverseSPT:
         # return price, revenue
         return self.prices[idx], revs[idx]
 
-    def _update_attrs(self, node, price=None, revenue=None, value=None, feature=None, X=None):
+    def _update_attrs(self, node, X, price, revenue):
         """
         Update node attributes.
         """
         # update attributes
+        node.X = X
         node.price = price
         node.revenue = revenue
-        node.value = value
+
+    def _update_params(self, node, feature, value):
+        """
+        Update split parameters.
+        """
         node.feature = feature
-        node.X = X
+        node.value = value
 
     def _preprocess(self, X, prices):
         """
@@ -214,12 +225,39 @@ class RiskAverseSPT:
         X = self._preprocess(X, prices)
         # create root node
         self.root_node = Node()
-        # assign price to root node
+        # get best price for partition
         price, revenue = self._get_best_price(X)
         # update attribtues
-        self._update_attrs(self.root_node, price=price, revenue=revenue, X=X)
+        self._update_attrs(self.root_node, X, price, revenue)
         # split node
         self._split(self.root_node)
+
+    def _transform(self, X, node):
+        """
+        Recursive function for self.transform()
+        """
+        # update node test data
+        node.X_test = X
+        # get split params
+        feature, value = node.feature, node.value
+        # split data
+        X1, X2 = self._split_data(X, feature, value)
+        # if not leaf node
+        if not self._is_leaf(node):
+            # recursively split
+            self._transform(X1, node.left)
+            self._transform(X2, node.right)
+
+    def transform(self, X):
+        """
+        Parition X into learned decision tree.
+        """
+        # get root
+        node = self.root_node
+        # safely convert data to numpy
+        X = np.asarray(X)
+        # transform recursivles
+        self._transform(X, node)
 
     def _is_leaf(self, node):
         """
@@ -255,7 +293,4 @@ class RiskAverseSPT:
         avg_rev = self.total_rev / self.n_train
         # return total and avg revenue
         return self.total_rev, avg_rev
-
-
-
 
