@@ -48,7 +48,14 @@ class DataGenerator:
             results['Y'].append(int(Y_star > 0))
 
         results = pd.DataFrame(results)
-        return results
+
+        # get price, covariates, and target
+        X = results.drop(['optimal_price', 'Y', 'price'], axis=1)
+        y = results['Y']
+        price = results['price']
+        optimal_price = results['optimal_price']  # true optimal
+
+        return X, y, price, optimal_price
 
     def model_2(self, n_samples):
         # dataset 2
