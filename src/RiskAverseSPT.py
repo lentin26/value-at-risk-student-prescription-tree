@@ -1,5 +1,5 @@
 import numpy as np
-
+import pandas as pd
 
 class Node:
     def __init__(self, X=None):
@@ -39,8 +39,10 @@ class RiskAverseSPT:
             old_rev = node.revenue.sum(axis=0)
             # prob that revenue decreases
             p =  new_rev - old_rev  
+            # compute risk
+            node.risk = (p < 0).sum() / len(p) 
             # return risk criteria boolean
-            return sum(p < 0) / len(p) < self.risk_proba
+            return node.risk < self.risk_proba
         else:
             return False
 
@@ -62,7 +64,7 @@ class RiskAverseSPT:
         else:
             return 0
 
-    def _update_partition(self, node, X1, X2, rev1, rev2, p1, p2, feature, value):
+    def _update_partition(self, node, idx1, idx2, rev1, rev2, p1, p2, feature, value):
         """
         Update node attributes if partition gives higher total revenue.
         """
@@ -75,37 +77,37 @@ class RiskAverseSPT:
             # update split params
             self._update_params(node, feature, value)
             # update left partition
-            self._update_attrs(node.left, X1, p1, rev1)
+            self._update_attrs(node.left, idx1, p1, rev1)
             # update right partition
-            self._update_attrs(node.right, X2, p2, rev2)
+            self._update_attrs(node.right, idx2, p2, rev2)
 
-    def _split_data(self, X, feature, value):
+    def _split_data(self, X, idx, feature, value):
         """
         Split data using split parameters.
         """
         # get boolean
-        t = X[:, feature] >= value
+        t = X[idx, feature] >= value
         # split data
-        X1, X2 =  X[t], X[~t]
+        idx1, idx2 =  idx[t], idx[~t]
         # return split
-        return X1, X2
+        return idx1, idx2
 
-    def _update_best_split(self, node, value, feature):
+    def _update_best_split(self, X, node, value, feature):
         """
         For a feature index j and feature value update nodes.
         """
         # split data
-        X1, X2 = self._split_data(node.X, feature, value)
+        idx1, idx2 = self._split_data(X, node.idx, feature, value)
         # get left revenue posterior rev1 for best price p1
-        p1, rev1 = self._get_best_price(X1)
+        p1, rev1 = self.teacher._get_best_price(X, idx1, self.prices)
         # get right revenue posterior rev2 for best price p2
-        p2, rev2 = self._get_best_price(X2)
+        p2, rev2 = self.teacher._get_best_price(X, idx2, self.prices)
         # update best parition node
         self._update_partition(
-            node, X1, X2, rev1, rev2, p1, p2, feature, value
+            node, idx1, idx2, rev1, rev2, p1, p2, feature, value
         )
 
-    def _get_feature_splits(self, node, j):
+    def _get_feature_splits(self, X, node, j):
         """
         Sort feature values and return midpoints.
 
@@ -115,7 +117,7 @@ class RiskAverseSPT:
         return: List of sorted features
         """
         # get unique features values and sort
-        x = np.sort(np.unique(node.X[:, j])) 
+        x = np.sort(np.unique(X[node.idx, j])) 
         # return value midpoits
         x = (x[1:] + x[:-1]) / 2
         # trim cuts near the edges
@@ -125,23 +127,23 @@ class RiskAverseSPT:
         """
         Remove children from node.
         """
-        # erase left
         node.left = None
-        # erase right
         node.right = None
+        node.feature = None
+        node.value = None
 
-    def _split_node(self, node):
+    def _split_node(self, X, node):
         """
         Iterate feature values and update optimal split.
         """
         # iterate through features
-        for j in range(node.X.shape[1]):
+        for j in range(X.shape[1]):
             # get all split values
-            values = self._get_feature_splits(node, j)
+            values = self._get_feature_splits(X, node, j)
             # iterate values
             for value in values:
                 # update best split
-                self._update_best_split(node, value, j)
+                self._update_best_split(X, node, value, j)
 
     def _revenue_increased(self, node):
         """
@@ -151,25 +153,26 @@ class RiskAverseSPT:
             (node.left.revenue is None) | (node.right.revenue is None)
         )
 
-    def _split(self, node):
+    def _split(self, X, node):
         """
         Split node into left and right.
         """
         # add left and right
         self._add_children(node)
         # split node into left and right
-        self._split_node(node)
+        self._split_node(X, node)
         # if VaR is true recursively split
         if self._is_risk_averse(node):
             # assert split params were assigned
             assert (node.feature is not None) & (node.value is not None)
             # split left
-            self._split(node.left)
+            self._split(X, node.left)
             # split right
-            self._split(node.right)
-        # else:
-        #     # otherwise, remove left and right
-        #     self._remove_children(node)
+            self._split(X, node.right)
+        else:
+            # otherwise, remove left and right
+            self._remove_children(node)
+            assert (node.feature is None) & (node.feature is None)
 
     def _add_children(self, node):
         """
@@ -180,23 +183,24 @@ class RiskAverseSPT:
 
         return node
 
-    def _get_best_price(self, X):
-        """
-        Find best price for max rev.
-        """
-        # get revenues
-        revs = [self.teacher.predict_proba(X, price) * price for price in self.prices]
-        # get idx of best price
-        idx = np.argmax([self._total_rev(rev) for rev in revs])
-        # return price, revenue
-        return self.prices[idx], revs[idx]
+    # def _get_best_price(self, X):  # move to teacher model
+    #     """
+    #     Find best price for max rev.
+    #     """
+    #     # get revenues
+    #     revs = [self.teacher.predict_proba(X, price) * price for price in self.prices]
+    #     # get idx of best price
+    #     idx = np.argmax([self._total_rev(rev) for rev in revs])
+    #     # return price, revenue
+    #     return self.prices[idx], revs[idx]
 
-    def _update_attrs(self, node, X, price, revenue):
+    def _update_attrs(self, node, idx, price, revenue):
         """
         Update node attributes.
         """
         # update attributes
-        node.X = X
+        # node.X = X
+        node.idx = idx
         node.price = price
         node.revenue = revenue
 
@@ -215,28 +219,31 @@ class RiskAverseSPT:
         X = np.asarray(X)
         # create root node
         self.root_node = Node()
+        # create index
+        idx = np.arange(len(X))
         # get best price for partition
-        price, revenue = self._get_best_price(X)
+        price, revenue = self.teacher._get_best_price(X, idx, self.prices)
         # update attribtues
-        self._update_attrs(self.root_node, X, price, revenue)
+        self._update_attrs(self.root_node, idx, price, revenue)
         # split node
-        self._split(self.root_node)
+        self._split(X, self.root_node)
 
-    def _transform(self, X, node):
+    def _transform(self, X, idx, node):
         """
         Recursive function for self.transform()
         """
         # update node test data
         node.X_test = X
+        node.idx_test = idx
         # get split params
         feature, value = node.feature, node.value
         # if not leaf node
         if not self._is_leaf(node):
             # split data
-            X1, X2 = self._split_data(X, feature, value)
+            idx1, idx2 = self._split_data(X, idx, feature, value)
             # recursively split
-            self._transform(X1, node.left)
-            self._transform(X2, node.right)
+            self._transform(X, idx1, node.left)
+            self._transform(X, idx2, node.right)
         else:
             # update revenue
             self.revenue += self._total_rev(node.revenue)
@@ -249,12 +256,14 @@ class RiskAverseSPT:
         node = self.root_node
         # safely convert data to numpy
         X = np.asarray(X)
+        # create index
+        idx = np.arange(len(X))
         # transform recursivles
-        self._transform(X, node)
+        self._transform(X, idx, node)
 
     def predict(self, X):
         """
-        Predict revenue.
+        Predict revenue. Change to prescibe prices.
         """
         # reset revenue
         self.revenue = 0
@@ -269,34 +278,48 @@ class RiskAverseSPT:
         Check if node is a leaf node.
         """
         # check for split parameters
-        return (node.feature is None) | (node.value is None)
+        return (node.left is None) | (node.right is None)
 
-    # def _expected_revenue(self, node):
-    #     """
-    #     Recursive function to add up revenue in leaf nodes.
-    #     """
-    #     # expected revenue
-    #     rev = node.revenue.mean(axis=1).sum()
-    #     # if leave node add revenue
-    #     if self._is_leaf(node):
-    #         # add revenue
-    #         self.total_rev += rev
-    #     else:
-    #         # recursive left
-    #         self._expected_revenue(node.left)
-    #         # recursive right
-    #         self._expected_revenue(node.right)
+    def _get_leaf_nodes(self, node=None):
+        """
+        Collect all leaf nodes into a list
+        """
+        if node is None:
+            node = self.root_node
 
-    # def expected_revenue(self):
-    #     """
-    #     Add up revenue in leaf nodes.
-    #     """
-    #     # reset total revenue
-    #     self.total_rev = 0
-    #     # add rev in leaf nodes
-    #     self._expected_revenue(self.root_node)
-    #     # compute average revenue
-    #     avg_rev = self.total_rev / self.n_train
-    #     # return total and avg revenue
-    #     return self.total_rev, avg_rev
+        if not self._is_leaf(node):
+            # recurse left
+            self._get_leaf_nodes(node.left)
+            # recurse right
+            self._get_leaf_nodes(node.right)
+        else:
+            self.leaf_nodes.append(node)
+    
+    def prescribe(self, X):
+        """
+        Use trained policy to prescribe prices based on covariates.
+        """
+        # init list
+        self.leaf_nodes = []
+        # fit data to tree 
+        self.transform(X)
+        # get leave nodes
+        self._get_leaf_nodes()
+        # get indices
+        results = []
+        for node in self.leaf_nodes:
+            for idx in node.idx_test:
+                results += [{"idx": idx, "price": node.price}]
+        # covert to dataframe and sort index
+        results = pd.DataFrame(results).set_index('idx')\
+            .sort_index(ascending=True)
+        # return prescribed prices
+        return results.price.to_numpy()
 
+    def _get_true_revenue(self, X, optimal_price):
+        """
+        Given optimal price get true revenue under prescription.
+        """
+        # total revenue
+        rev = ((self.prescribe(X) <= optimal_price) * optimal_price).sum()
+        return rev, rev / len(X)

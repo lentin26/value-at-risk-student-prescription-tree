@@ -76,6 +76,23 @@ class BinomGLM:
         # safely convert to numpy array
         return np.asarray(pred_proba)
 
+    def _get_best_price(self, X, idx, prices):
+        """
+        Prescribe the price which maximizes revenue.
+        """
+        # get revenues
+        revs = [self.predict_proba(X[idx], price) * price for price in prices]
+        # get idx of best price
+        idx = np.argmax([self._total_rev(rev) for rev in revs])
+        # return price, revenue
+        return prices[idx], revs[idx]
+
+    def _total_rev(self, revenue):
+        """
+        Total expected revenue in partition.
+        """
+        return revenue.sum(axis=0).mean()
+
     def save_params(self, PATH):
         """
         Save trained model params to local file system.
